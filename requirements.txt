@@ -2,3 +2,6 @@ ipykernel
 openpyxl
 pandas
 numpy
+scikit-learn
+xgboost
+lightgbm
