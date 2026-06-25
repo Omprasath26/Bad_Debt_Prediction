@@ -9,3 +9,4 @@ MutualInformation_Feature_Importance.csv
 RandomForest_Feature_Importance.csv
 RFE_Feature_Ranking.csv
 XGBoost_Feature_Importance.csv
+catboost_info
