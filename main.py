@@ -1514,3 +1514,519 @@ plt.legend(loc="lower right")
 plt.grid(True)
 
 plt.show()
+
+# ML flow production :
+
+
+import os
+import warnings
+warnings.filterwarnings("ignore")
+
+import joblib
+import mlflow
+import mlflow.sklearn
+import mlflow.xgboost
+import mlflow.lightgbm
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.metrics import (
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+    roc_curve,
+    roc_auc_score
+)
+
+
+# 1) CONFIG
+
+EXPERIMENT_NAME = "Bad_Debt_Prediction_25_Models"
+MODEL_DIR = "saved_25_models"
+MLFLOW_ARTIFACT_DIR = "mlflow_artifacts"
+
+os.makedirs(MLFLOW_ARTIFACT_DIR, exist_ok=True)
+
+mlflow.set_experiment(EXPERIMENT_NAME)
+
+
+
+# 2) HELPER FUNCTIONS
+
+def get_model_type_from_name(model_name: str):
+    name = model_name.lower()
+    if "xgboost" in name:
+        return "xgboost"
+    elif "lightgbm" in name:
+        return "lightgbm"
+    elif "catboost" in name:
+        return "catboost"
+    else:
+        return "sklearn"
+
+
+def get_test_data_from_feature_set(feature_set_name: str):
+    """
+    Pull X_test and y_test from the split_datasets dictionary.
+    """
+    X_test = split_datasets[feature_set_name]["X_test"]
+    y_test = split_datasets[feature_set_name]["y_test"]
+    return X_test, y_test
+
+
+def get_scores(model, X_test):
+    """
+    Return probability/score for ROC curve.
+    """
+    if hasattr(model, "predict_proba"):
+        return model.predict_proba(X_test)[:, 1]
+    elif hasattr(model, "decision_function"):
+        return model.decision_function(X_test)
+    else:
+        return model.predict(X_test)
+
+
+def save_confusion_matrix_plot(y_true, y_pred, run_name):
+    cm = confusion_matrix(y_true, y_pred)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+    disp.plot(cmap="Blues", values_format="d")
+    plt.title(f"Confusion Matrix - {run_name}")
+
+    file_path = os.path.join(MLFLOW_ARTIFACT_DIR, f"{run_name}_confusion_matrix.png")
+    plt.savefig(file_path, bbox_inches="tight")
+    plt.close()
+    return file_path
+
+
+def save_roc_curve_plot(y_true, y_score, run_name):
+    fpr, tpr, _ = roc_curve(y_true, y_score)
+    auc_score = roc_auc_score(y_true, y_score)
+
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, linewidth=2, label=f"AUC = {auc_score:.4f}")
+    plt.plot([0, 1], [0, 1], linestyle="--")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title(f"ROC Curve - {run_name}")
+    plt.legend(loc="lower right")
+    plt.grid(True)
+
+    file_path = os.path.join(MLFLOW_ARTIFACT_DIR, f"{run_name}_roc_curve.png")
+    plt.savefig(file_path, bbox_inches="tight")
+    plt.close()
+    return file_path
+
+
+def save_single_run_metrics_csv(row_dict, run_name):
+    metrics_df = pd.DataFrame([{
+        "accuracy": row_dict["accuracy"],
+        "precision": row_dict["precision"],
+        "recall": row_dict["recall"],
+        "f1_score": row_dict["f1_score"],
+        "roc_auc": row_dict["roc_auc"]
+    }])
+
+    file_path = os.path.join(MLFLOW_ARTIFACT_DIR, f"{run_name}_metrics.csv")
+    metrics_df.to_csv(file_path, index=False)
+    return file_path
+
+
+def log_model_by_type(model, model_type, artifact_path="model"):
+    """
+    Route model logging to the right MLflow flavor.
+    """
+    if model_type == "xgboost":
+        mlflow.xgboost.log_model(model, artifact_path=artifact_path)
+
+    elif model_type == "lightgbm":
+        mlflow.lightgbm.log_model(model, artifact_path=artifact_path)
+
+    elif model_type == "catboost":
+        # safest approach: save raw model file and log artifact
+        temp_cat_path = os.path.join(MLFLOW_ARTIFACT_DIR, "temp_catboost_model.cbm")
+        model.save_model(temp_cat_path)
+        mlflow.log_artifact(temp_cat_path, artifact_path=artifact_path)
+
+    else:
+        mlflow.sklearn.log_model(model, artifact_path=artifact_path)
+
+
+
+# 3) LOAD RESULTS CSV
+
+results_csv_path = os.path.join(MODEL_DIR, "all_25_model_results.csv")
+results_df = pd.read_csv(results_csv_path)
+
+print("Loaded results CSV:", results_df.shape)
+display(results_df.head())
+
+
+
+# 4) LOG EACH PRESERVED MODEL TO MLFLOW
+
+for idx, row in results_df.iterrows():
+    feature_set = row["feature_set"]
+    model_name = row["model_name"]
+    model_path = row["model_path"]
+
+    run_name = f"{model_name.replace(' ', '_')}_{feature_set}"
+    model_type = get_model_type_from_name(model_name)
+
+    print(f"Logging to MLflow -> {run_name}")
+
+    
+    # load preserved model
+   
+    model = joblib.load(model_path)
+
+    
+    # get correct test set
+    
+    X_test, y_test = get_test_data_from_feature_set(feature_set)
+
+    
+    # predictions for artifacts
+    
+    y_pred = model.predict(X_test)
+    y_score = get_scores(model, X_test)
+
+    
+    # create plots/files
+    
+    cm_path = save_confusion_matrix_plot(y_test, y_pred, run_name)
+    roc_path = save_roc_curve_plot(y_test, y_score, run_name)
+    metrics_csv_path = save_single_run_metrics_csv(row.to_dict(), run_name)
+
+    
+    # MLflow run
+    
+    with mlflow.start_run(run_name=run_name):
+        # params
+        mlflow.log_param("feature_set", feature_set)
+        mlflow.log_param("model_name", model_name)
+        mlflow.log_param("model_type", model_type)
+        mlflow.log_param("num_features", int(row["num_features"]))
+        mlflow.log_param("train_rows", int(row["train_rows"]))
+        mlflow.log_param("test_rows", int(row["test_rows"]))
+        mlflow.log_param("saved_model_path", model_path)
+
+        # metrics
+        mlflow.log_metric("accuracy", float(row["accuracy"]))
+        mlflow.log_metric("precision", float(row["precision"]))
+        mlflow.log_metric("recall", float(row["recall"]))
+        mlflow.log_metric("f1_score", float(row["f1_score"]))
+        mlflow.log_metric("roc_auc", float(row["roc_auc"]))
+
+        # plots / files
+        mlflow.log_artifact(cm_path, artifact_path="plots")
+        mlflow.log_artifact(roc_path, artifact_path="plots")
+        mlflow.log_artifact(metrics_csv_path, artifact_path="metrics")
+        mlflow.log_artifact(model_path, artifact_path="saved_model_file")
+
+        # model object logging
+        log_model_by_type(model, model_type, artifact_path="model")
+
+    print(f"Completed MLflow run -> {run_name}")
+
+
+print("\n===================================================")
+print("All 25 preserved models logged to MLflow successfully.")
+print("===================================================")
+
+
+# FINAL PRODUCTION MODEL LOGGING TO MLFLOW
+# Logs your chosen final model: Best_LightGBM_Model.pkl
+
+
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+    roc_curve
+)
+
+
+# 1) Load final model
+
+FINAL_MODEL_PATH = "Best_LightGBM_Model.pkl"
+
+if not os.path.exists(FINAL_MODEL_PATH):
+    raise FileNotFoundError(f"{FINAL_MODEL_PATH} not found in current working directory.")
+
+final_model = joblib.load(FINAL_MODEL_PATH)
+
+
+# 2) Use Top50 test data
+
+X_test_final = split_datasets["Top50"]["X_test"]
+y_test_final = split_datasets["Top50"]["y_test"]
+X_train_final = split_datasets["Top50"]["X_train"]
+
+
+# 3) Evaluate final model
+
+y_pred_final = final_model.predict(X_test_final)
+
+if hasattr(final_model, "predict_proba"):
+    y_score_final = final_model.predict_proba(X_test_final)[:, 1]
+elif hasattr(final_model, "decision_function"):
+    y_score_final = final_model.decision_function(X_test_final)
+else:
+    y_score_final = y_pred_final
+
+final_metrics = {
+    "accuracy": accuracy_score(y_test_final, y_pred_final),
+    "precision": precision_score(y_test_final, y_pred_final, zero_division=0),
+    "recall": recall_score(y_test_final, y_pred_final, zero_division=0),
+    "f1_score": f1_score(y_test_final, y_pred_final, zero_division=0),
+    "roc_auc": roc_auc_score(y_test_final, y_score_final)
+}
+
+print("Final model metrics:")
+for k, v in final_metrics.items():
+    print(f"{k}: {v:.6f}")
+
+
+# 4) Create artifact folder
+
+FINAL_ARTIFACT_DIR = "mlflow_final_model_artifacts"
+os.makedirs(FINAL_ARTIFACT_DIR, exist_ok=True)
+
+
+# 5) Save confusion matrix
+
+cm = confusion_matrix(y_test_final, y_pred_final)
+disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+disp.plot(cmap="Blues", values_format="d")
+plt.title("Final LightGBM Top50 - Confusion Matrix")
+cm_path = os.path.join(FINAL_ARTIFACT_DIR, "final_lightgbm_top50_confusion_matrix.png")
+plt.savefig(cm_path, bbox_inches="tight")
+plt.close()
+
+
+# 6) Save ROC curve
+
+fpr, tpr, _ = roc_curve(y_test_final, y_score_final)
+auc_score = roc_auc_score(y_test_final, y_score_final)
+
+plt.figure(figsize=(8, 6))
+plt.plot(fpr, tpr, label=f"AUC = {auc_score:.4f}", linewidth=2)
+plt.plot([0, 1], [0, 1], linestyle="--")
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("Final LightGBM Top50 - ROC Curve")
+plt.legend(loc="lower right")
+plt.grid(True)
+roc_path = os.path.join(FINAL_ARTIFACT_DIR, "final_lightgbm_top50_roc_curve.png")
+plt.savefig(roc_path, bbox_inches="tight")
+plt.close()
+
+
+# 7) Log final production run
+
+with mlflow.start_run(run_name="Final_LightGBM_Top50_Production_Model"):
+    # params
+    mlflow.log_param("model_name", "LightGBM")
+    mlflow.log_param("feature_set", "Top50")
+    mlflow.log_param("stage", "production_final_model")
+    mlflow.log_param("num_features", X_train_final.shape[1])
+    mlflow.log_param("train_rows", split_datasets["Top50"]["X_train"].shape[0])
+    mlflow.log_param("test_rows", X_test_final.shape[0])
+
+    # metrics
+    for metric_name, metric_value in final_metrics.items():
+        mlflow.log_metric(metric_name, float(metric_value))
+
+    # log plots
+    mlflow.log_artifact(cm_path, artifact_path="plots")
+    mlflow.log_artifact(roc_path, artifact_path="plots")
+
+    # log the final pickle model
+    mlflow.log_artifact(FINAL_MODEL_PATH, artifact_path="final_model_pickle")
+
+print("\n===================================================")
+print("Final production model logged to MLflow successfully.")
+print("Run name: Final_LightGBM_Top50_Production_Model")
+print("===================================================")
+
+
+# CORRECTED FINAL PRODUCTION MODEL RUN FOR MLFLOW
+# This logs the final model as a REAL LightGBM MLflow model
+
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+    roc_curve
+)
+
+
+# 1) CONFIG
+
+FINAL_MODEL_PATH = "Best_LightGBM_Model.pkl"
+FINAL_RUN_NAME = "Final_LightGBM_Top50_Production_Model_v2"
+FINAL_ARTIFACT_DIR = "mlflow_final_model_artifacts_v2"
+
+os.makedirs(FINAL_ARTIFACT_DIR, exist_ok=True)
+
+
+# 2) LOAD FINAL MODEL
+
+if not os.path.exists(FINAL_MODEL_PATH):
+    raise FileNotFoundError(f"{FINAL_MODEL_PATH} not found.")
+
+final_model = joblib.load(FINAL_MODEL_PATH)
+
+
+# 3) GET FINAL DATASET (Top50)
+
+X_train_final = split_datasets["Top50"]["X_train"]
+X_test_final  = split_datasets["Top50"]["X_test"]
+y_train_final = split_datasets["Top50"]["y_train"]
+y_test_final  = split_datasets["Top50"]["y_test"]
+
+
+# 4) EVALUATE FINAL MODEL
+
+y_pred_final = final_model.predict(X_test_final)
+
+if hasattr(final_model, "predict_proba"):
+    y_score_final = final_model.predict_proba(X_test_final)[:, 1]
+elif hasattr(final_model, "decision_function"):
+    y_score_final = final_model.decision_function(X_test_final)
+else:
+    y_score_final = y_pred_final
+
+final_metrics = {
+    "accuracy": accuracy_score(y_test_final, y_pred_final),
+    "precision": precision_score(y_test_final, y_pred_final, zero_division=0),
+    "recall": recall_score(y_test_final, y_pred_final, zero_division=0),
+    "f1_score": f1_score(y_test_final, y_pred_final, zero_division=0),
+    "roc_auc": roc_auc_score(y_test_final, y_score_final)
+}
+
+print("Final production model metrics:")
+for k, v in final_metrics.items():
+    print(f"{k}: {v:.6f}")
+
+
+# 5) SAVE CONFUSION MATRIX
+
+cm = confusion_matrix(y_test_final, y_pred_final)
+disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+disp.plot(cmap="Blues", values_format="d")
+plt.title("Final LightGBM Top50 - Confusion Matrix")
+cm_path = os.path.join(FINAL_ARTIFACT_DIR, "final_lightgbm_top50_confusion_matrix.png")
+plt.savefig(cm_path, bbox_inches="tight")
+plt.close()
+
+
+# 6) SAVE ROC CURVE
+
+fpr, tpr, _ = roc_curve(y_test_final, y_score_final)
+auc_score = roc_auc_score(y_test_final, y_score_final)
+
+plt.figure(figsize=(8, 6))
+plt.plot(fpr, tpr, label=f"AUC = {auc_score:.4f}", linewidth=2)
+plt.plot([0, 1], [0, 1], linestyle="--")
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("Final LightGBM Top50 - ROC Curve")
+plt.legend(loc="lower right")
+plt.grid(True)
+
+roc_path = os.path.join(FINAL_ARTIFACT_DIR, "final_lightgbm_top50_roc_curve.png")
+plt.savefig(roc_path, bbox_inches="tight")
+plt.close()
+
+
+# 7) OPTIONAL: FEATURE IMPORTANCE CSV
+
+feature_importance_path = None
+
+if hasattr(final_model, "feature_importances_"):
+    feature_names = list(X_train_final.columns)
+    fi_df = (
+        pd.DataFrame({
+            "feature": feature_names,
+            "importance": final_model.feature_importances_
+        })
+        .sort_values("importance", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    feature_importance_path = os.path.join(
+        FINAL_ARTIFACT_DIR,
+        "final_lightgbm_top50_feature_importance.csv"
+    )
+    fi_df.to_csv(feature_importance_path, index=False)
+
+
+# 8) START NEW FINAL PRODUCTION RUN
+
+with mlflow.start_run(run_name=FINAL_RUN_NAME):
+
+    
+    # PARAMS / TAGS
+    
+    mlflow.log_param("model_name", "LightGBM")
+    mlflow.log_param("feature_set", "Top50")
+    mlflow.log_param("stage", "production_final_model")
+    mlflow.log_param("num_features", X_train_final.shape[1])
+    mlflow.log_param("train_rows", X_train_final.shape[0])
+    mlflow.log_param("test_rows", X_test_final.shape[0])
+
+    # Optional model hyperparameters
+    try:
+        final_params = final_model.get_params()
+        for k, v in final_params.items():
+            if isinstance(v, (str, int, float, bool)) or v is None:
+                mlflow.log_param(f"param_{k}", v)
+    except Exception as e:
+        print("Warning: could not log all model params:", e)
+
+    mlflow.set_tag("model_stage", "final_production")
+    mlflow.set_tag("selection_reason", "best_roc_auc_among_25_runs")
+    mlflow.set_tag("project", "Bad Debt Prediction")
+
+    
+    # METRICS
+    
+    for metric_name, metric_value in final_metrics.items():
+        mlflow.log_metric(metric_name, float(metric_value))
+
+    
+    # LOG PLOTS / ARTIFACTS
+    
+    mlflow.log_artifact(cm_path, artifact_path="plots")
+    mlflow.log_artifact(roc_path, artifact_path="plots")
+
+    if feature_importance_path is not None:
+        mlflow.log_artifact(feature_importance_path, artifact_path="feature_importance")
+
+    # also keep the original pickle file as an extra artifact
+    mlflow.log_artifact(FINAL_MODEL_PATH, artifact_path="final_model_pickle")
+
+    
+    # LOG AS REAL LIGHTGBM MODEL
+    # THIS is the key fix
+    
+    mlflow.lightgbm.log_model(
+        lgb_model=final_model,
+        artifact_path="model"
+    )
+
+print("\n===================================================")
+print("Corrected final production MLflow run logged successfully.")
+print(f"Run name: {FINAL_RUN_NAME}")
+print("This run should now show 'lightgbm' in the Models column.")
+print("===================================================")

@@ -11,3 +11,8 @@ RFE_Feature_Ranking.csv
 XGBoost_Feature_Importance.csv
 catboost_info
 Model_Comparison_Results.csv
+mlflow_artifacts
+mlflow_final_model_artifacts
+mlflow_final_model_artifacts_v2
+mlruns
+saved_25_models
