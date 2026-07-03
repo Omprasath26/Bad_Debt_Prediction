@@ -1,0 +1,33 @@
+from pathlib import Path
+
+
+# PROJECT ROOT
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+# ARTIFACT PATHS
+
+DEPLOYMENT_ARTIFACTS_DIR = PROJECT_ROOT / "deployment_artifacts"
+
+SCORING_DATA_PATH = DEPLOYMENT_ARTIFACTS_DIR / "deployment_scoring_data.csv"
+DISPLAY_DATA_PATH = DEPLOYMENT_ARTIFACTS_DIR / "customer_display_data.csv"
+FEATURE_COLUMNS_PATH = DEPLOYMENT_ARTIFACTS_DIR / "top50_feature_columns.pkl"
+DEPLOYMENT_METADATA_PATH = DEPLOYMENT_ARTIFACTS_DIR / "deployment_metadata.pkl"
+
+
+# FINAL MODEL PATH
+# CHANGE THIS ONLY IF YOUR FINAL MODEL FILE NAME IS DIFFERENT
+
+MODEL_PATH = PROJECT_ROOT / "saved_25_models" / "lightgbm_top50.pkl"
+
+# COLUMN CONFIG
+
+CUSTOMER_ID_COL = "Customer"
+
+
+# DECISION THRESHOLDS
+
+GOOD_MAX_THRESHOLD = 0.30
+BAD_MAX_THRESHOLD = 0.60
+# > 0.60 => Reject
