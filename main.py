@@ -2030,3 +2030,223 @@ print("Corrected final production MLflow run logged successfully.")
 print(f"Run name: {FINAL_RUN_NAME}")
 print("This run should now show 'lightgbm' in the Models column.")
 print("===================================================")
+
+
+# DEPLOYMENT RESET - FIND CUSTOMER ID SOURCE ==
+
+import pandas as pd
+
+print("=" * 100)
+print("1) SCAN ALL DATAFRAME VARIABLES IN NOTEBOOK MEMORY")
+print("=" * 100)
+
+global_snapshot = list(globals().items())   # <-- FIX: freeze globals first
+
+for var_name, var_value in global_snapshot:
+    if isinstance(var_value, pd.DataFrame):
+        cols = list(var_value.columns)
+        customer_like_cols = [c for c in cols if "cust" in c.lower() or "customer" in c.lower()]
+        print(f"\nDataFrame: {var_name}")
+        print(f"Shape    : {var_value.shape}")
+        print(f"Customer-like columns: {customer_like_cols if customer_like_cols else 'None'}")
+
+print("\n" + "=" * 100)
+print("2) CHECK COMMON POSSIBLE CUSTOMER-ID COLUMN NAMES INSIDE merged_df")
+print("=" * 100)
+
+possible_customer_cols = [
+    "Customer", "CUSTOMER", "customer",
+    "Customer_ID", "CUSTOMER_ID", "customer_id",
+    "Cust_ID", "cust_id", "CUST_ID",
+    "Customer Number", "CUSTOMER NUMBER"
+]
+
+for col in possible_customer_cols:
+    print(f"{col}: {col in merged_df.columns}")
+
+print("\n" + "=" * 100)
+print("3) SHOW FIRST 20 COLUMNS OF EVERY DATAFRAME THAT LOOKS RELEVANT")
+print("=" * 100)
+
+for var_name, var_value in global_snapshot:
+    if isinstance(var_value, pd.DataFrame):
+        cols = list(var_value.columns)
+        if any("cust" in c.lower() or "customer" in c.lower() for c in cols):
+            print(f"\nDataFrame: {var_name}")
+            print(f"Shape    : {var_value.shape}")
+            print("Columns  :", cols[:20])
+            display(var_value.head(3))
+
+
+# PHASE 4 - STAGE 1: BUILD DEPLOYMENT ARTIFACTS
+# Customer-ID based deployment dataset creation
+
+
+import os
+import joblib
+import pandas as pd
+
+
+# 0. CONFIG
+
+DEPLOYMENT_DIR = "deployment_artifacts"
+FINAL_FEATURE_SET = "Top50"
+CUSTOMER_COL = "Customer"
+BASE_DF_NAME = "_7"   # based on your diagnostic output
+
+os.makedirs(DEPLOYMENT_DIR, exist_ok=True)
+
+
+# 1. VALIDATE REQUIRED OBJECTS
+
+if "split_datasets" not in globals():
+    raise NameError("split_datasets not found. Run training / feature-set cells first.")
+
+if FINAL_FEATURE_SET not in split_datasets:
+    raise KeyError(f"{FINAL_FEATURE_SET} not found in split_datasets.")
+
+if BASE_DF_NAME not in globals():
+    raise NameError(f"Base dataframe '{BASE_DF_NAME}' not found in notebook memory.")
+
+base_df = globals()[BASE_DF_NAME].copy()
+
+if CUSTOMER_COL not in base_df.columns:
+    raise KeyError(f"'{CUSTOMER_COL}' not found in base dataframe '{BASE_DF_NAME}'.")
+
+print("=" * 90)
+print("BASE DEPLOYMENT DATAFRAME")
+print(f"DataFrame name : {BASE_DF_NAME}")
+print(f"Shape          : {base_df.shape}")
+print("=" * 90)
+
+
+# 2. EXTRACT FINAL TOP50 TRAIN / TEST FEATURES
+
+X_train_final = split_datasets[FINAL_FEATURE_SET]["X_train"].copy()
+X_test_final  = split_datasets[FINAL_FEATURE_SET]["X_test"].copy()
+
+top50_feature_columns = list(X_train_final.columns)
+
+print("\nFinal feature set summary")
+print(f"Feature set name : {FINAL_FEATURE_SET}")
+print(f"Number of features: {len(top50_feature_columns)}")
+
+
+# 3. REBUILD FULL TOP50 SCORING DATASET
+#    Combine train + test back into one full scoring dataframe
+
+full_top50_df = pd.concat([X_train_final, X_test_final], axis=0)
+full_top50_df = full_top50_df.sort_index()
+
+print("\nRebuilt full Top50 scoring matrix")
+print(f"Shape: {full_top50_df.shape}")
+
+
+# 4. ALIGN BASE DATAFRAME WITH TOP50 INDEXES
+
+missing_idx = set(full_top50_df.index) - set(base_df.index)
+
+if missing_idx:
+    raise ValueError(
+        f"Base dataframe is missing {len(missing_idx)} row indexes required by Top50 dataset. "
+        "Index alignment failed."
+    )
+
+base_df_aligned = base_df.loc[full_top50_df.index].copy()
+
+print("\nAligned base dataframe shape:", base_df_aligned.shape)
+
+
+# 5. BUILD DEPLOYMENT SCORING DATASET
+#    Final dataset used by FastAPI / Streamlit scoring
+
+deployment_scoring_df = pd.concat(
+    [base_df_aligned[[CUSTOMER_COL]].reset_index(drop=True),
+     full_top50_df.reset_index(drop=True)],
+    axis=1
+)
+
+# remove duplicate customers if any
+before_rows = deployment_scoring_df.shape[0]
+deployment_scoring_df = deployment_scoring_df.drop_duplicates(subset=[CUSTOMER_COL]).reset_index(drop=True)
+after_rows = deployment_scoring_df.shape[0]
+
+print("\nDeployment scoring dataset created")
+print(f"Rows before duplicate removal : {before_rows}")
+print(f"Rows after duplicate removal  : {after_rows}")
+print(f"Columns                       : {deployment_scoring_df.shape[1]}")
+
+
+# 6. BUILD CUSTOMER DISPLAY DATASET
+#    Only for showing useful customer info in UI
+
+preferred_display_cols = [
+    CUSTOMER_COL,
+    "OUTCOME",
+    "RISK_SCORE",
+    "DEFAULT_AMT",
+    "ENQUIRIES_6M",
+    "EMPLOYED_NO_MTHS",
+    "NO_ADDRESS_AT_MONTHS",
+    "NO_MONTHS_OLDEST_ACCOUNT",
+    "SCORE_CR22",
+    "NO_SCORE",
+    "RISK_RELATIVE_CR21",
+    "RISK_RELATIVE_ODDS_CR21"
+]
+
+available_display_cols = [c for c in preferred_display_cols if c in base_df_aligned.columns]
+
+customer_display_df = base_df_aligned[available_display_cols].copy()
+customer_display_df = customer_display_df.drop_duplicates(subset=[CUSTOMER_COL]).reset_index(drop=True)
+
+print("\nCustomer display dataset created")
+print("Display columns:", customer_display_df.columns.tolist())
+
+
+# 7. SAVE ARTIFACTS
+
+feature_list_path = os.path.join(DEPLOYMENT_DIR, "top50_feature_columns.pkl")
+scoring_data_path = os.path.join(DEPLOYMENT_DIR, "deployment_scoring_data.csv")
+display_data_path = os.path.join(DEPLOYMENT_DIR, "customer_display_data.csv")
+metadata_path     = os.path.join(DEPLOYMENT_DIR, "deployment_metadata.pkl")
+
+joblib.dump(top50_feature_columns, feature_list_path)
+deployment_scoring_df.to_csv(scoring_data_path, index=False)
+customer_display_df.to_csv(display_data_path, index=False)
+
+deployment_metadata = {
+    "base_dataframe_name": BASE_DF_NAME,
+    "customer_column": CUSTOMER_COL,
+    "feature_set": FINAL_FEATURE_SET,
+    "num_features": len(top50_feature_columns),
+    "scoring_dataset_shape": deployment_scoring_df.shape,
+    "display_dataset_shape": customer_display_df.shape,
+    "feature_list_path": feature_list_path,
+    "scoring_data_path": scoring_data_path,
+    "display_data_path": display_data_path
+}
+joblib.dump(deployment_metadata, metadata_path)
+
+
+# 8. SUMMARY
+
+print("\n" + "=" * 90)
+print("DEPLOYMENT ARTIFACTS CREATED SUCCESSFULLY")
+print("=" * 90)
+print(f"Feature list saved     : {feature_list_path}")
+print(f"Scoring data saved     : {scoring_data_path}")
+print(f"Display data saved     : {display_data_path}")
+print(f"Metadata saved         : {metadata_path}")
+print("=" * 90)
+
+print("\nDeployment scoring preview:")
+display(deployment_scoring_df.head())
+
+print("\nCustomer display preview:")
+display(customer_display_df.head())
+
+print("\nFinal shapes:")
+print("deployment_scoring_df :", deployment_scoring_df.shape)
+print("customer_display_df   :", customer_display_df.shape)
+
