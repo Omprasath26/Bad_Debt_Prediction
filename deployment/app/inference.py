@@ -3,14 +3,14 @@ from typing import Any, Dict
 import joblib
 import pandas as pd
 
-from app.config import (
+from deployment.app.config import (
     CUSTOMER_ID_COL,
     DISPLAY_DATA_PATH,
     FEATURE_COLUMNS_PATH,
     MODEL_PATH,
     SCORING_DATA_PATH,
 )
-from app.utils import (
+from deployment.app.utils import (
     build_recommendation,
     map_probability_to_decision,
     map_probability_to_label,
