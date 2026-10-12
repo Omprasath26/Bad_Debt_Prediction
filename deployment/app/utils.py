@@ -1,5 +1,5 @@
 
-from deployment.app.config import GOOD_MAX_THRESHOLD, BAD_MAX_THRESHOLD
+from app.config import GOOD_MAX_THRESHOLD, BAD_MAX_THRESHOLD
 
 def map_probability_to_decision(probability: float) -> str:
     """

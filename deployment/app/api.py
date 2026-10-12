@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 
-from deployment.app.inference import BadDebtInferenceService
-from deployment.app.schemas import HealthResponse, PredictionRequest, PredictionResponse
+from app.inference import BadDebtInferenceService
+from app.schemas import HealthResponse, PredictionRequest, PredictionResponse
 
 app = FastAPI(
     title="Bad Debt Prediction API",
