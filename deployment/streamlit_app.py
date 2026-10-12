@@ -1,5 +1,6 @@
 import requests
 import streamlit as st
+import os
 
 
 # PAGE CONFIG
@@ -13,7 +14,7 @@ st.set_page_config(
 
 # CONFIG
 
-API_BASE_URL = "http://127.0.0.1:8000"
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 HEALTH_URL = f"{API_BASE_URL}/health"
 PREDICT_URL = f"{API_BASE_URL}/predict-by-customer"
 

@@ -1,0 +1,17 @@
+
+.git
+.venv
+__pycache__
+*.pyc
+.env
+mlruns
+mlflow_artifacts
+mlflow_final_model_artifacts
+mlflow_final_model_artifacts_v2
+catboost_info
+*.ipynb
+Data.xlsm
+Additional Info.xlsx
+cleaned_data.csv
+feature_engineered_dataset.csv
+saved_25_models

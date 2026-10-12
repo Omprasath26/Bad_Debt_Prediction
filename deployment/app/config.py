@@ -1,9 +1,10 @@
 from pathlib import Path
-
+import os
 
 # PROJECT ROOT
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(
+    os.getenv("PROJECT_ROOT", str(Path(__file__).resolve().parents[2])))
 
 
 # ARTIFACT PATHS
